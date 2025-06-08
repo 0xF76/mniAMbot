@@ -51,6 +51,7 @@ void AMCOM_Deserialize(AMCOM_Receiver* receiver, const void* data, size_t dataSi
 		switch (receiver->receivedPacketState) {
 			case AMCOM_PACKET_STATE_EMPTY:
 				if(byte == AMCOM_SOP) {
+					receiver->receivedPacket.header.sop = AMCOM_SOP;
 					receiver->receivedPacketState = AMCOM_PACKET_STATE_GOT_SOP;
 				}
 				break;
