@@ -93,12 +93,9 @@ float wrap_unsigned(float angle) {
     return angle;
 }
 
-float clamp(float v, float min, float max) {
-    if (v < min) return min;
-    if (v > max) return max;
-    return v;
-}
 
+// TODO: radius zalezny od rozmiaru mapy
+// TODO: radius zalezny od rozmiaru gracza
 
 float choose_angle(void) {
     /* Logika: ucieczka -> jedzenie -> polowanie -> reszta */
@@ -147,12 +144,12 @@ float choose_angle(void) {
                     worst_danger_score = score;
                     danger_vec = d; // aktualizuj wektor zagrożenia
                 }
-            } else if(player->hp < my_player->hp) {
-                /* słabszy = potencjalna ofiara */
-                if(dist < best_prey_dist) {
-                    best_prey_dist = dist;
-                    prey_vec = d; // aktualizuj wektor ofiary
-                }
+            }
+        } else if(player->hp < my_player->hp) {
+            /* słabszy = potencjalna ofiara */
+            if(dist < best_prey_dist) {
+                best_prey_dist = dist;
+                prey_vec = d; // aktualizuj wektor ofiary
             }
         }
     }
@@ -232,9 +229,9 @@ float choose_angle(void) {
 
     float desired = atan2f(dir.y, dir.x);
     float delta = wrap_signed(desired - heading);
-    heading = wrap_unsigned(heading + delta);
+    heading = wrap_signed(heading + delta);
 
-    return heading;
+    return wrap_unsigned(heading);
 }
 
 
