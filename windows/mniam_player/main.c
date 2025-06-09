@@ -16,10 +16,6 @@
 #define MAX_NUMBER_OF_PLAYERS 8
 #define MAX_NUMBER_OF_OBJECTS 255
 
-#define DANGER_RAD 120.0f
-#define SAFE_MARGIN 70.0f
-#define THETA_MAX (M_PI/4)
-
 
 enum AMCOM_ObjectType {
     AMCOM_OBJECT_PLAYER = 0,
@@ -99,6 +95,11 @@ float wrap_unsigned(float angle) {
 
 float choose_angle(void) {
     /* Logika: ucieczka -> jedzenie -> polowanie -> reszta */
+    const float FOOD_THRESHOLD = 180.0f;
+    const float PREY_THRESHOLD = 250.0f;
+    const float DANGER_RAD = 120.0f;
+    const float SAFE_MARGIN = 70.0f;
+
 
     // Poprzedni kierunek gracza
     static float heading = 0.0f;
@@ -171,6 +172,8 @@ float choose_angle(void) {
         }
     }
 
+
+
     /* Jedzenie */
     for(int i = 0 ; i < MAX_NUMBER_OF_OBJECTS; i++) {
         object_t* food = &game.food[i];
@@ -186,8 +189,6 @@ float choose_angle(void) {
     }
 
 
-    const float FOOD_THRESHOLD = 180.0f;
-    const float PREY_THRESHOLD = 250.0f;
 
     vec_t dir;
 
