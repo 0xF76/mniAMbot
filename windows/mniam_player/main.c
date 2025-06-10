@@ -12,7 +12,6 @@
 
 //additional includes for the player
 #include <math.h>
-#include <stdbool.h>
 
 #include "vector.h"
 
@@ -35,12 +34,19 @@ typedef struct AMPACKED {
 
 typedef struct {
     uint8_t my_player_number;
+
     uint8_t number_of_players;
     object_t players[MAX_NUMBER_OF_PLAYERS];
 
     object_t food[MAX_NUMBER_OF_OBJECTS];
+    uint8_t number_of_food;
+
     object_t sparks[MAX_NUMBER_OF_OBJECTS];
+    uint8_t number_of_sparks;
+
     object_t glue[MAX_NUMBER_OF_OBJECTS];
+    uint8_t number_of_glue;
+
     float map_width;
     float map_height;
 } game_t;
@@ -57,7 +63,7 @@ float choose_angle(void) {
 
     const float DANGER_THRESHOLD = 100.0f;
 
-    object_t* worst_danger = NULL;
+    const object_t* worst_danger = NULL;
     float worst_danger_score = 0.0f;
     vec_t worst_danger_vec = v_init(0.0f, 0.0f);
 
@@ -71,7 +77,7 @@ float choose_angle(void) {
     object_t* my_player = &game.players[game.my_player_number];
 
     /* PLAYERS */
-    for(uint8_t i = 0; i < MAX_NUMBER_OF_PLAYERS; i++) {
+    for(uint8_t i = 0; i < game.number_of_players; i++) {
         // skip yourself
         if(i == game.my_player_number) {
             continue;
@@ -107,7 +113,7 @@ float choose_angle(void) {
     }
 
     /* SPARKS */
-    for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+    for(uint8_t i = 0; i < game.number_of_sparks; i++) {
         const object_t* spark = &game.sparks[i];
 
         //skip dead sparks
@@ -130,7 +136,7 @@ float choose_angle(void) {
 
 
     /* FOOD */
-    for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+    for(uint8_t i = 0; i < game.number_of_food; i++) {
         const object_t* food = &game.food[i];
 
         //skip dead food
@@ -154,7 +160,8 @@ float choose_angle(void) {
             continue;
         }
 
-        for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+        /* GLUE */
+        for(uint8_t i = 0; i < game.number_of_glue; i++) {
             const object_t* glue = &game.glue[i];
             //skip dead glue
             if(glue->hp <= 0) {
@@ -187,7 +194,6 @@ float choose_angle(void) {
         direction = v_angle(worst_danger_vec) + (float)M_PI_2;
     }
 
-
     return direction;
 }
 
@@ -201,7 +207,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
     case AMCOM_IDENTIFY_REQUEST:
         printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
         AMCOM_IdentifyResponsePayload identifyResponse;
-        sprintf(identifyResponse.playerName, "Mariusz Pudzianowski");
+        sprintf(identifyResponse.playerName, "PudziAM");
         toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
         break;
     case AMCOM_NEW_GAME_REQUEST:
@@ -241,6 +247,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                         game.food[object->objectNo].hp = object->hp;
                         game.food[object->objectNo].x = object->x;
                         game.food[object->objectNo].y = object->y;
+                        game.number_of_food++;
                     } else {
                         printf("Received food object with invalid number: %d\n", object->objectNo);
                     }
@@ -250,6 +257,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                         game.sparks[object->objectNo].hp = object->hp;
                         game.sparks[object->objectNo].x = object->x;
                         game.sparks[object->objectNo].y = object->y;
+                        game.number_of_sparks++;
                     } else {
                         printf("Received spark object with invalid number: %d\n", object->objectNo);
                     }
@@ -259,6 +267,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                         game.glue[object->objectNo].hp = object->hp;
                         game.glue[object->objectNo].x = object->x;
                         game.glue[object->objectNo].y = object->y;
+                        game.number_of_glue++;
                     } else {
                         printf("Received glue object with invalid number: %d\n", object->objectNo);
                     }
