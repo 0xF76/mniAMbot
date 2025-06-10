@@ -12,9 +12,12 @@
 
 //additional includes for the player
 #include <math.h>
+#include <stdbool.h>
+
+#include "vector.h"
 
 #define MAX_NUMBER_OF_PLAYERS 8
-#define MAX_NUMBER_OF_OBJECTS 255
+#define MAX_NUMBER_OF_OBJECTS 100
 
 
 enum AMCOM_ObjectType {
@@ -38,8 +41,6 @@ typedef struct {
     object_t food[MAX_NUMBER_OF_OBJECTS];
     object_t sparks[MAX_NUMBER_OF_OBJECTS];
     object_t glue[MAX_NUMBER_OF_OBJECTS];
-
-
     float map_width;
     float map_height;
 } game_t;
@@ -51,188 +52,143 @@ game_t game = {
     .map_height = 0.0f
 };
 
-typedef struct {
-    float x;
-    float y;
-} vec_t;
-
-vec_t v_sub(vec_t a, vec_t b) {
-    vec_t result;
-    result.x = a.x - b.x;
-    result.y = a.y - b.y;
-    return result;
-}
-
-float v_len(vec_t v) {
-    return sqrtf(v.x * v.x + v.y * v.y);
-}
-
-vec_t v_norm(vec_t v) {
-    float len = v_len(v);
-    vec_t result;
-    if(len > 1e-4f) {
-        return (vec_t){v.x / len, v.y / len};
-    } else {
-        return (vec_t){0.0f, 0.0f}; // return zero vector if length is too small
-    }
-}
-
-float wrap_signed(float angle) {
-    while (angle < -M_PI) angle += 2.0f * M_PI;
-    while (angle > M_PI) angle -= 2.0f * M_PI;
-    return angle;
-}
-
-float wrap_unsigned(float angle) {
-    while (angle < 0.0f) angle += 2.0f * M_PI;
-    while (angle >= 2.0f * M_PI) angle -= 2.0f * M_PI;
-    return angle;
-}
-
-
-// TODO: radius zalezny od rozmiaru mapy
-// TODO: radius zalezny od rozmiaru gracza
-
 float choose_angle(void) {
-    /* Logika: ucieczka -> jedzenie -> polowanie -> reszta */
-    const float FOOD_THRESHOLD = 180.0f;
-    const float PREY_THRESHOLD = 250.0f;
-    const float DANGER_RAD = 120.0f;
-    const float SAFE_MARGIN = 70.0f;
+    static float direction = 0.0f; // angle in radians
 
+    const float DANGER_THRESHOLD = 100.0f;
 
-    // Poprzedni kierunek gracza
-    static float heading = 0.0f;
-
-    // Zbieranie informacji o planszy
-
-    // zagrożenie
+    object_t* worst_danger = NULL;
     float worst_danger_score = 0.0f;
-    vec_t danger_vec = {0.0f, 0.0f};
+    vec_t worst_danger_vec = v_init(0.0f, 0.0f);
 
-    // jedzenie
-    float best_food_dist = 1e9f;
-    vec_t food_vec = {0.0f, 0.0f};
+    float best_food_score = 0.0f;
+    vec_t best_food_vec = v_init(0.0f, 0.0f);
 
-    // potencjalna ofiara
-    float best_prey_dist = 1e9f;
-    vec_t prey_vec = {0.0f, 0.0f};
+    float best_prey_score = 0.0f;
+    vec_t best_prey_vec = v_init(0.0f, 0.0f);
 
 
     object_t* my_player = &game.players[game.my_player_number];
 
-
-    /* Gracze */
-    for(int i = 0; i < game.number_of_players; i++) {
+    /* PLAYERS */
+    for(uint8_t i = 0; i < MAX_NUMBER_OF_PLAYERS; i++) {
+        // skip yourself
         if(i == game.my_player_number) {
-            continue; // pomiń samego siebie
+            continue;
         }
 
-        object_t* player = &game.players[i];
-
+        const object_t* player = &game.players[i];
+        //skip dead players
         if(player->hp <= 0) {
-            continue; // pomiń martwych graczy
+            continue;
         }
 
-        vec_t d = v_sub((vec_t){player->x, player->y}, (vec_t){my_player->x, my_player->y});
-        float dist = v_len(d);
+        vec_t v = v_init(player->x - my_player->x, player->y - my_player->y);
+        float distance = v_len(v);
 
-        if(player->hp > my_player->hp) {
-            /* silniejszy = zagrożenie */
-            if(dist < DANGER_RAD) {
-                float score = player->hp/(dist+1);
+
+
+        if(player->hp + 3 > my_player->hp) {
+            if(distance < DANGER_THRESHOLD) {
+                float score = player->hp/(distance+1);
                 if(score > worst_danger_score) {
+                    worst_danger = player;
                     worst_danger_score = score;
-                    danger_vec = d; // aktualizuj wektor zagrożenia
+                    worst_danger_vec = v;
                 }
             }
-        } else if(player->hp < my_player->hp) {
-            /* słabszy = potencjalna ofiara */
-            if(dist < best_prey_dist) {
-                best_prey_dist = dist;
-                prey_vec = d; // aktualizuj wektor ofiary
+        } else {
+            float score = player->hp / (distance + 1.0f);
+            if(score > best_prey_score) {
+                best_prey_score = score;
+                best_prey_vec = v;
             }
         }
     }
 
-    /* Iskry */
-    for(int i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
-        object_t* spark = &game.sparks[i];
+    /* SPARKS */
+    for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+        const object_t* spark = &game.sparks[i];
+
+        //skip dead sparks
         if(spark->hp <= 0) {
-            continue; // pomiń martwe iskry
+            continue;
         }
-        vec_t d = v_sub((vec_t){spark->x, spark->y}, (vec_t){my_player->x, my_player->y});
-        float dist = v_len(d);
-        if(dist < DANGER_RAD) {
-            float score = 3.0f / (dist + 1); // iskry są mniej niebezpieczne niż gracze, ale nadal niebezpieczne
+
+        vec_t v = v_init(spark->x - my_player->x, spark->y - my_player->y);
+        float distance = v_len(v);
+
+        if(distance < DANGER_THRESHOLD) {
+            float score = 1.0f/ (distance + 1.0f);
             if(score > worst_danger_score) {
+                worst_danger = spark;
                 worst_danger_score = score;
-                danger_vec = d; // aktualizuj wektor zagrożenia
+                worst_danger_vec = v;
             }
         }
     }
 
 
+    /* FOOD */
+    for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+        const object_t* food = &game.food[i];
 
-    /* Jedzenie */
-    for(int i = 0 ; i < MAX_NUMBER_OF_OBJECTS; i++) {
-        object_t* food = &game.food[i];
+        //skip dead food
         if(food->hp <= 0) {
-            continue; // pomiń martwe jedzenie
+            continue;
         }
-        vec_t d = v_sub((vec_t){food->x, food->y}, (vec_t){my_player->x, my_player->y});
-        float dist = v_len(d);
-        if(dist < best_food_dist) {
-            best_food_dist = dist;
-            food_vec = d; // aktualizuj wektor jedzenia
+
+        vec_t v = v_init(food->x - my_player->x, food->y - my_player->y);
+        float distance = v_len(v);
+
+
+        float danger_angle = M_PI/4;
+        if(worst_danger != NULL) {
+            danger_angle += atan2f((25.0f + (float)worst_danger->hp)/2, distance);
+        }
+
+
+
+        //skip food that is too close to a danger
+        if(v_angle(v) < v_angle(worst_danger_vec) + danger_angle && v_angle(v) > v_angle(worst_danger_vec) - danger_angle && distance > v_len(worst_danger_vec)) {
+            continue;
+        }
+
+        for(uint8_t i = 0; i < MAX_NUMBER_OF_OBJECTS; i++) {
+            const object_t* glue = &game.glue[i];
+            //skip dead glue
+            if(glue->hp <= 0) {
+                continue;
+            }
+            vec_t glue_vec = v_init(glue->x - my_player->x, glue->y - my_player->y);
+            float glue_distance = v_len(glue_vec) - 100.0f; // 100 is the glue radius
+
+            if(glue_distance < distance) {
+                float glue_angle = atan2f(100, glue_distance);
+
+                if(v_angle(v) < v_angle(glue_vec) + glue_angle && v_angle(v) > v_angle(glue_vec) - glue_angle) {
+                    distance *= 20; // if the food is in the glue radius, make it harder to reach
+                }
+            }
+        }
+
+        float score = (float)food->hp / (distance + 1.0f);
+        if(score > best_food_score) {
+            best_food_score = score;
+            best_food_vec = v;
         }
     }
 
-
-
-    vec_t dir;
-
-    if(worst_danger_score > 0) {
-        // uciekaj przed zagrożeniem
-        dir = v_norm((vec_t){-danger_vec.x, -danger_vec.y});
-    } else if(best_food_dist < FOOD_THRESHOLD) {
-        // zjedz najblizszy tranzystor, jesli jest blisko
-        dir = v_norm(food_vec);
-    } else if(best_prey_dist < PREY_THRESHOLD) {
-        // brak jedzenia -> poluj na słabszego gracza
-        dir = v_norm(prey_vec);
-    } else if(best_food_dist < 1e9f) {
-        // jedzenie daleko -> idz w jego stronę
-        dir = v_norm(food_vec);
+    if(best_food_score > 0) {
+        direction = v_angle(best_food_vec);
+    } else if(best_prey_score >0) {
+        direction = v_angle(best_prey_vec);
     } else {
-        // nic ciekawego -> utrzymaj kurs
-        dir = (vec_t){cosf(heading), sinf(heading)}; //
+        direction = v_angle(worst_danger_vec) + (float)M_PI_2;
     }
 
 
-
-
-    float hw = game.map_width * 0.5f;
-    float hh = game.map_height * 0.5f;
-
-    if(my_player->x > hw - SAFE_MARGIN) {
-        dir.x -= 0.5f;
-    }
-    if(my_player->x < -hw + SAFE_MARGIN) {
-        dir.x += 0.5f;
-    }
-    if(my_player->y > hh - SAFE_MARGIN) {
-        dir.y -= 0.5f;
-    }
-    if(my_player->y < -hh + SAFE_MARGIN) {
-        dir.y += 0.5f;
-    }
-
-    float desired = atan2f(dir.y, dir.x);
-    float delta = wrap_signed(desired - heading);
-    heading = wrap_signed(heading + delta);
-
-    return wrap_unsigned(heading);
+    return direction;
 }
 
 
@@ -245,7 +201,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
     case AMCOM_IDENTIFY_REQUEST:
         printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
         AMCOM_IdentifyResponsePayload identifyResponse;
-        sprintf(identifyResponse.playerName, "Mortadelka");
+        sprintf(identifyResponse.playerName, "Mariusz Pudzianowski");
         toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
         break;
     case AMCOM_NEW_GAME_REQUEST:
@@ -260,7 +216,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
 
 
         AMCOM_NewGameResponsePayload newGameResponse;
-        sprintf(newGameResponse.helloMessage, "<Powitanie>");
+        sprintf(newGameResponse.helloMessage, "Dawaj na ring!");
         toSend = AMCOM_Serialize(AMCOM_NEW_GAME_RESPONSE, &newGameResponse, sizeof(newGameResponse), buf);
         break;
     case AMCOM_OBJECT_UPDATE_REQUEST:
@@ -335,7 +291,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
     case AMCOM_GAME_OVER_REQUEST:
         printf("Got GAME_OVER.request.\n");
         AMCOM_GameOverResponsePayload gameOverResponse;
-        sprintf(gameOverResponse.endMessage, "<Pozegnanie>");
+        sprintf(gameOverResponse.endMessage, "To by nic nie dalo...");
         toSend = AMCOM_Serialize(AMCOM_GAME_OVER_RESPONSE, &gameOverResponse, sizeof(gameOverResponse), buf);
         break;
     default:
