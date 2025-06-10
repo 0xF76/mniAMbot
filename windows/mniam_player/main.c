@@ -62,6 +62,7 @@ float choose_angle(void) {
     static float direction = 0.0f; // angle in radians
 
     const float DANGER_THRESHOLD = 100.0f;
+    const float FOOD_THRESHOLD = 500.0f;
 
     const object_t* worst_danger = NULL;
     float worst_danger_score = 0.0f;
@@ -88,6 +89,7 @@ float choose_angle(void) {
         if(player->hp <= 0) {
             continue;
         }
+
 
         vec_t v = v_init(player->x - my_player->x, player->y - my_player->y);
         float distance = v_len(v);
@@ -180,7 +182,7 @@ float choose_angle(void) {
         }
 
         float score = (float)food->hp / (distance + 1.0f);
-        if(score > best_food_score) {
+        if(distance < FOOD_THRESHOLD && score > best_food_score) {
             best_food_score = score;
             best_food_vec = v;
         }
