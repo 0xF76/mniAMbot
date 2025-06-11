@@ -60,5 +60,10 @@ float v_angle(vec_t v);
  */
 float v_dot(vec_t a, vec_t b);
 
-
+/**
+ * @brief Calculates the cross product of two vectors.
+ * @param a The first vector.
+ * @param b The second vector.
+ * @return The cross product of the two vectors, while ensuring both are normalized.
+ */
 float v_cross(vec_t a, vec_t b);
