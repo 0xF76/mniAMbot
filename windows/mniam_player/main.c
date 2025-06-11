@@ -12,11 +12,12 @@
 
 //additional includes for the player
 #include <math.h>
-
 #include "vector.h"
 
 #define MAX_NUMBER_OF_PLAYERS 8
-#define MAX_NUMBER_OF_OBJECTS 100
+#define MAX_NUMBER_OF_FOOD 100
+#define MAX_NUMBER_OF_SPARKS 8
+#define MAX_NUMBER_OF_GLUE 8
 
 
 enum AMCOM_ObjectType {
@@ -26,7 +27,7 @@ enum AMCOM_ObjectType {
     AMCOM_OBJECT_GLUE = 3
 };
 
-typedef struct AMPACKED {
+typedef struct {
     int8_t hp;
     float x;
     float y;
@@ -38,13 +39,13 @@ typedef struct {
     uint8_t number_of_players;
     object_t players[MAX_NUMBER_OF_PLAYERS];
 
-    object_t food[MAX_NUMBER_OF_OBJECTS];
+    object_t food[MAX_NUMBER_OF_FOOD];
     uint8_t number_of_food;
 
-    object_t sparks[MAX_NUMBER_OF_OBJECTS];
+    object_t sparks[MAX_NUMBER_OF_SPARKS];
     uint8_t number_of_sparks;
 
-    object_t glue[MAX_NUMBER_OF_OBJECTS];
+    object_t glue[MAX_NUMBER_OF_GLUE];
     uint8_t number_of_glue;
 
     float map_width;
@@ -55,8 +56,20 @@ game_t game = {
     .my_player_number = 0,
     .number_of_players = 0,
     .map_width = 0.0f,
-    .map_height = 0.0f
+    .map_height = 0.0f,
+    .number_of_food = 0,
+    .number_of_sparks = 0,
+    .number_of_glue = 0
 };
+
+object_t* my_player = NULL;
+
+
+float calculate_score(float hp, float distance) {
+    const float distance_scale = sqrtf(2) * game.map_height;
+
+    return hp/(distance/distance_scale);
+}
 
 float choose_angle(void) {
     static float direction = 0.0f; // angle in radians
@@ -73,6 +86,7 @@ float choose_angle(void) {
 
     float best_prey_score = 0.0f;
     vec_t best_prey_vec = v_init(0.0f, 0.0f);
+
 
 
     object_t* my_player = &game.players[game.my_player_number];
@@ -95,18 +109,45 @@ float choose_angle(void) {
         float distance = v_len(v);
 
 
+        // determine if the player is a danger or a prey
+        if(player->hp >= my_player->hp) {
+            if(distance < DANGER_THRESHOLD + (player->hp + my_player->hp)/2) {
+                float score = calculate_score(player->hp, distance);
 
-        if(player->hp + 3 > my_player->hp) {
-            if(distance < DANGER_THRESHOLD) {
-                float score = player->hp/(distance+1);
                 if(score > worst_danger_score) {
                     worst_danger = player;
                     worst_danger_score = score;
                     worst_danger_vec = v;
                 }
             }
-        } else {
-            float score = player->hp / (distance + 1.0f);
+        } else if(player->hp < my_player->hp) {
+
+            /* GLUE */
+            for(uint8_t i = 0; i < game.number_of_glue; i++) {
+                const object_t* glue = &game.glue[i];
+                //skip dead glue
+                if(glue->hp <= 0) {
+                    continue;
+                }
+                vec_t glue_vec = v_init(glue->x - my_player->x, glue->y - my_player->y);
+                float glue_distance = v_len(glue_vec) - 100.0f; // 100 is the glue radius
+
+                if(glue_distance < distance) {
+                    float glue_angle = atan2f(100, glue_distance);
+
+                    if(v_angle(v) < v_angle(glue_vec) + glue_angle && v_angle(v) > v_angle(glue_vec) - glue_angle) {
+                        distance *= 20; // if the food is in the glue radius, make it harder to reach
+                    }
+                }
+            }
+
+            float score = calculate_score(5*player->hp, distance);
+
+            if(distance > FOOD_THRESHOLD) {
+                continue;
+            }
+
+
             if(score > best_prey_score) {
                 best_prey_score = score;
                 best_prey_vec = v;
@@ -127,7 +168,7 @@ float choose_angle(void) {
         float distance = v_len(v);
 
         if(distance < DANGER_THRESHOLD) {
-            float score = 1.0f/ (distance + 1.0f);
+            float score = calculate_score(1, distance);
             if(score > worst_danger_score) {
                 worst_danger = spark;
                 worst_danger_score = score;
@@ -158,7 +199,7 @@ float choose_angle(void) {
 
 
         //skip food that is too close to a danger
-        if(v_angle(v) < v_angle(worst_danger_vec) + danger_angle && v_angle(v) > v_angle(worst_danger_vec) - danger_angle && distance > v_len(worst_danger_vec)) {
+        if(v_angle(v) < v_angle(worst_danger_vec) + danger_angle && v_angle(v) > v_angle(worst_danger_vec) - danger_angle && distance + 40.0f > v_len(worst_danger_vec)) {
             continue;
         }
 
@@ -181,20 +222,56 @@ float choose_angle(void) {
             }
         }
 
-        float score = (float)food->hp / (distance + 1.0f);
+        float score = calculate_score(10*food->hp, distance);
         if(distance < FOOD_THRESHOLD && score > best_food_score) {
             best_food_score = score;
             best_food_vec = v;
         }
     }
 
-    if(best_food_score > 0) {
-        direction = v_angle(best_food_vec);
-    } else if(best_prey_score >0) {
-        direction = v_angle(best_prey_vec);
+    printf("---------------------------------------------\n");
+    printf("%f %f food\n", best_food_score, v_angle(best_food_vec)*180/M_PI);
+    printf("%f %f prey\n", best_prey_score, v_angle(best_prey_vec)*180/M_PI);
+    printf("%f %f danger\n", worst_danger_score, v_angle(worst_danger_vec)*180/M_PI);
+
+    //print what is the biggest danger, print type, hp, x,y
+    if(worst_danger != NULL) {
+        printf("Worst danger: HP: %d, Position: (%.2f, %.2f)\n",
+
+            worst_danger->hp,
+            worst_danger_vec.x + my_player->x,
+            worst_danger_vec.y + my_player->y);
     } else {
-        direction = v_angle(worst_danger_vec) + (float)M_PI_2;
+        printf("No danger detected\n");
     }
+
+    if(best_food_score > worst_danger_score && best_food_score > best_prey_score && v_dot(best_food_vec, worst_danger_vec) < 0.5f) {
+        direction = v_angle(best_food_vec);
+        printf("Choosing food direction: %.2f degrees\n", direction * 180 / M_PI);
+    } else if(best_prey_score > worst_danger_score && best_prey_score > best_food_score && v_dot(best_prey_vec, worst_danger_vec) < 0.5f) {
+        direction = v_angle(best_prey_vec);
+        printf("Choosing prey direction: %.2f degrees\n", direction * 180 / M_PI);
+    } else if(worst_danger_score > 0) {
+        if(v_cross(v_init(cosf(direction), sinf(direction)), worst_danger_vec) < 0) {
+            direction += M_PI_2; // turn left
+        } else {
+            direction -= M_PI_2; // turn right
+        }
+        printf("Trying to avoid danger: %.2f degrees\n", direction * 180 / M_PI);
+    }
+
+    if(my_player->x > game.map_width/2 - 100.0f) {
+        direction -= M_PI_4;
+    } else if(my_player->x < -game.map_width/2 + 100.0f) {
+        direction += M_PI_4;
+    }
+
+    if(my_player->y > game.map_height/2 - 100.0f) {
+        direction -= M_PI_4;
+    } else if(my_player->y < -game.map_height/2 + 100.0f) {
+        direction += M_PI_4;
+    }
+
 
     return direction;
 }
@@ -207,13 +284,11 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
 
     switch (packet->header.type) {
     case AMCOM_IDENTIFY_REQUEST:
-        printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
         AMCOM_IdentifyResponsePayload identifyResponse;
         sprintf(identifyResponse.playerName, "PudziAM");
         toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
         break;
     case AMCOM_NEW_GAME_REQUEST:
-        printf("Got NEW_GAME.request.\n");
         const AMCOM_NewGameRequestPayload* packetNewGame = (const AMCOM_NewGameRequestPayload*)packet->payload;
 
         game.my_player_number = packetNewGame->playerNumber;
@@ -228,7 +303,6 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
         toSend = AMCOM_Serialize(AMCOM_NEW_GAME_RESPONSE, &newGameResponse, sizeof(newGameResponse), buf);
         break;
     case AMCOM_OBJECT_UPDATE_REQUEST:
-        printf("Got OBJECT_UPDATE.request.\n");
 
         const AMCOM_ObjectUpdateRequestPayload* objectUpdate = (const AMCOM_ObjectUpdateRequestPayload*)packet->payload;
 
@@ -245,7 +319,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_FOOD:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_FOOD) {
                         game.food[object->objectNo].hp = object->hp;
                         game.food[object->objectNo].x = object->x;
                         game.food[object->objectNo].y = object->y;
@@ -255,7 +329,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_SPARK:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_SPARKS) {
                         game.sparks[object->objectNo].hp = object->hp;
                         game.sparks[object->objectNo].x = object->x;
                         game.sparks[object->objectNo].y = object->y;
@@ -265,7 +339,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_GLUE:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_GLUE) {
                         game.glue[object->objectNo].hp = object->hp;
                         game.glue[object->objectNo].x = object->x;
                         game.glue[object->objectNo].y = object->y;
@@ -283,8 +357,8 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
         }
 
         if (game.my_player_number < game.number_of_players) {
-            object_t* my_player = &game.players[game.my_player_number];
-            printf("My player: HP: %d, Position: (%.2f, %.2f)\n", my_player->hp, my_player->x, my_player->y);
+            my_player = &game.players[game.my_player_number];
+            // printf("My player: HP: %d, Position: (%.2f, %.2f)\n", my_player->hp, my_player->x, my_player->y);
         } else {
             printf("My player number %d is out of range (max %d players)\n", game.my_player_number, game.number_of_players);
         }
@@ -293,14 +367,12 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
 
         break;
     case AMCOM_MOVE_REQUEST:
-        printf("Got MOVE.request.\n");
         AMCOM_MoveResponsePayload moveResponse;
 
         moveResponse.angle = choose_angle();
         toSend = AMCOM_Serialize(AMCOM_MOVE_RESPONSE, &moveResponse, sizeof(moveResponse), buf);
         break;
     case AMCOM_GAME_OVER_REQUEST:
-        printf("Got GAME_OVER.request.\n");
         AMCOM_GameOverResponsePayload gameOverResponse;
         sprintf(gameOverResponse.endMessage, "To by nic nie dalo...");
         toSend = AMCOM_Serialize(AMCOM_GAME_OVER_RESPONSE, &gameOverResponse, sizeof(gameOverResponse), buf);
