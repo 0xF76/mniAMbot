@@ -12,11 +12,13 @@
 
 //additional includes for the player
 #include <math.h>
-
 #include "vector.h"
+#include <stdbool.h>
 
 #define MAX_NUMBER_OF_PLAYERS 8
-#define MAX_NUMBER_OF_OBJECTS 100
+#define MAX_NUMBER_OF_FOOD 100
+#define MAX_NUMBER_OF_SPARKS 8
+#define MAX_NUMBER_OF_GLUE 8
 
 
 enum AMCOM_ObjectType {
@@ -26,11 +28,17 @@ enum AMCOM_ObjectType {
     AMCOM_OBJECT_GLUE = 3
 };
 
-typedef struct AMPACKED {
+typedef struct {
     int8_t hp;
     float x;
     float y;
 } object_t;
+
+typedef struct {
+    const object_t* obj;
+    float score;
+    vec_t vector;
+} target_t;
 
 typedef struct {
     uint8_t my_player_number;
@@ -38,13 +46,13 @@ typedef struct {
     uint8_t number_of_players;
     object_t players[MAX_NUMBER_OF_PLAYERS];
 
-    object_t food[MAX_NUMBER_OF_OBJECTS];
+    object_t food[MAX_NUMBER_OF_FOOD];
     uint8_t number_of_food;
 
-    object_t sparks[MAX_NUMBER_OF_OBJECTS];
+    object_t sparks[MAX_NUMBER_OF_SPARKS];
     uint8_t number_of_sparks;
 
-    object_t glue[MAX_NUMBER_OF_OBJECTS];
+    object_t glue[MAX_NUMBER_OF_GLUE];
     uint8_t number_of_glue;
 
     float map_width;
@@ -55,150 +63,166 @@ game_t game = {
     .my_player_number = 0,
     .number_of_players = 0,
     .map_width = 0.0f,
-    .map_height = 0.0f
+    .map_height = 0.0f,
+    .number_of_food = 0,
+    .number_of_sparks = 0,
+    .number_of_glue = 0
 };
+
+object_t* my_player = NULL;
+
+
+float calculate_score(float hp, float distance) {
+    const float distance_scale = sqrtf(2) * game.map_height;
+
+    return hp/(distance/distance_scale);
+}
+
+bool is_glue_on_path(vec_t vector) {
+    for(uint8_t i = 0; i < game.number_of_glue; i++) {
+        const object_t* glue = &game.glue[i];
+
+        //skip dead glue
+        if(glue->hp <= 0) {
+            continue;
+        }
+
+        vec_t glue_vector = v_init(glue->x - my_player->x, glue->y - my_player->y);
+        float glue_distance = v_len(glue_vector) - 100; //100 is the glue radius
+        float distance = v_len(vector);
+
+        if(glue_distance < distance) {
+            float glue_angle = atan2f(100, glue_distance);
+
+            if(v_angle(vector) < v_angle(glue_vector) + glue_angle && v_angle(vector) > v_angle(glue_vector) - glue_angle) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 float choose_angle(void) {
     static float direction = 0.0f; // angle in radians
 
-    const float DANGER_THRESHOLD = 100.0f;
-    const float FOOD_THRESHOLD = 500.0f;
+    //TODO: radius based on player size
 
-    const object_t* worst_danger = NULL;
-    float worst_danger_score = 0.0f;
-    vec_t worst_danger_vec = v_init(0.0f, 0.0f);
+    const float DANGER_RADIUS = 150.0f; // radius around the player where danger is considered
+    const float SPARK_RADIUS = 50.0f; // radius around the spark where danger is considered
 
-    float best_food_score = 0.0f;
-    vec_t best_food_vec = v_init(0.0f, 0.0f);
+    target_t worst_danger = {NULL, 0.0f, v_init(0,0)};
+    target_t best_food = {NULL, 0.0f, v_init(0,0)};
+    target_t best_prey = {NULL, 0.0f, v_init(0,0)};
+    target_t worst_spark = {NULL, 0.0f, v_init(0,0)};
 
-    float best_prey_score = 0.0f;
-    vec_t best_prey_vec = v_init(0.0f, 0.0f);
-
-
-    object_t* my_player = &game.players[game.my_player_number];
-
-    /* PLAYERS */
+    // --- Players ---
     for(uint8_t i = 0; i < game.number_of_players; i++) {
         // skip yourself
         if(i == game.my_player_number) {
             continue;
         }
 
-        const object_t* player = &game.players[i];
-        //skip dead players
+        object_t* player = &game.players[i];
+        // skip dead players
         if(player->hp <= 0) {
             continue;
         }
 
+        vec_t player_vector = v_init(player->x - my_player->x, player->y - my_player->y);
+        float player_distance = v_len(player_vector);
 
-        vec_t v = v_init(player->x - my_player->x, player->y - my_player->y);
-        float distance = v_len(v);
-
-
-
-        if(player->hp + 3 > my_player->hp) {
-            if(distance < DANGER_THRESHOLD) {
-                float score = player->hp/(distance+1);
-                if(score > worst_danger_score) {
-                    worst_danger = player;
-                    worst_danger_score = score;
-                    worst_danger_vec = v;
-                }
+        if(player->hp > my_player->hp) {
+            if(player_distance > DANGER_RADIUS) {
+                continue; // too far to be dangerous
             }
-        } else {
-            float score = player->hp / (distance + 1.0f);
-            if(score > best_prey_score) {
-                best_prey_score = score;
-                best_prey_vec = v;
+
+            float score = calculate_score(player->hp, player_distance);
+            if(score > worst_danger.score) {
+                worst_danger.obj = player;
+                worst_danger.score = score;
+                worst_danger.vector = player_vector;
+            }
+        } else if(my_player->hp > player->hp) {
+
+            player_distance = is_glue_on_path(player_vector) ? player_distance * 20 : player_distance;
+
+            float score = calculate_score(my_player->hp, player_distance);
+            if(score > best_prey.score) {
+                best_prey.obj = player;
+                best_prey.score = score;
+                best_prey.vector = player_vector;
             }
         }
     }
 
-    /* SPARKS */
+    // --- Sparks ---
     for(uint8_t i = 0; i < game.number_of_sparks; i++) {
         const object_t* spark = &game.sparks[i];
-
-        //skip dead sparks
+        // skip dead sparks
         if(spark->hp <= 0) {
             continue;
         }
 
-        vec_t v = v_init(spark->x - my_player->x, spark->y - my_player->y);
-        float distance = v_len(v);
+        vec_t spark_vector = v_init(spark->x - my_player->x, spark->y - my_player->y);
+        float spark_distance = v_len(spark_vector);
 
-        if(distance < DANGER_THRESHOLD) {
-            float score = 1.0f/ (distance + 1.0f);
-            if(score > worst_danger_score) {
-                worst_danger = spark;
-                worst_danger_score = score;
-                worst_danger_vec = v;
-            }
+        if(spark_distance > SPARK_RADIUS) {
+            continue; // too far to be dangerous
+        }
+
+        float score = calculate_score(spark->hp, spark_distance);
+        if(score > worst_spark.score) {
+            worst_spark.obj = spark;
+            worst_spark.score = score;
+            worst_spark.vector = spark_vector;
         }
     }
 
 
-    /* FOOD */
+    // --- Food ---
     for(uint8_t i = 0; i < game.number_of_food; i++) {
         const object_t* food = &game.food[i];
-
-        //skip dead food
+        // skip dead food
         if(food->hp <= 0) {
             continue;
         }
 
-        vec_t v = v_init(food->x - my_player->x, food->y - my_player->y);
-        float distance = v_len(v);
+        vec_t food_vector = v_init(food->x - my_player->x, food->y - my_player->y);
+        float food_distance = v_len(food_vector);
 
+        food_distance = is_glue_on_path(food_vector) ? food_distance * 20 : food_distance;
 
-        float danger_angle = M_PI/4;
-        if(worst_danger != NULL) {
-            danger_angle += atan2f((25.0f + (float)worst_danger->hp)/2, distance);
-        }
-
-
-
-        //skip food that is too close to a danger
-        if(v_angle(v) < v_angle(worst_danger_vec) + danger_angle && v_angle(v) > v_angle(worst_danger_vec) - danger_angle && distance > v_len(worst_danger_vec)) {
-            continue;
-        }
-
-        /* GLUE */
-        for(uint8_t i = 0; i < game.number_of_glue; i++) {
-            const object_t* glue = &game.glue[i];
-            //skip dead glue
-            if(glue->hp <= 0) {
-                continue;
-            }
-            vec_t glue_vec = v_init(glue->x - my_player->x, glue->y - my_player->y);
-            float glue_distance = v_len(glue_vec) - 100.0f; // 100 is the glue radius
-
-            if(glue_distance < distance) {
-                float glue_angle = atan2f(100, glue_distance);
-
-                if(v_angle(v) < v_angle(glue_vec) + glue_angle && v_angle(v) > v_angle(glue_vec) - glue_angle) {
-                    distance *= 20; // if the food is in the glue radius, make it harder to reach
-                }
-            }
-        }
-
-        float score = (float)food->hp / (distance + 1.0f);
-        if(distance < FOOD_THRESHOLD && score > best_food_score) {
-            best_food_score = score;
-            best_food_vec = v;
+        float score = calculate_score(food->hp, food_distance);
+        if(score > best_food.score) {
+            best_food.obj = food;
+            best_food.score = score;
+            best_food.vector = food_vector;
         }
     }
 
-    if(best_food_score > 0) {
-        direction = v_angle(best_food_vec);
-    } else if(best_prey_score >0) {
-        direction = v_angle(best_prey_vec);
-    } else {
-        direction = v_angle(worst_danger_vec) + (float)M_PI_2;
+
+
+    // --- Direction logic ---
+    if(worst_danger.score > 0) {
+        direction = v_angle(v_init(-worst_danger.vector.y, worst_danger.vector.x));
     }
+    else if(worst_spark.score > 0) {
+        direction = v_angle(v_init(-worst_spark.vector.y, -worst_spark.vector.x));
+    }
+    else if(best_food.score > 0) {
+        direction = v_angle(best_food.vector);
+    }
+    else if(best_prey.score > 0) {
+        direction = v_angle(best_prey.vector);
+    }
+
+
+    // Normalizacja kąta do [0, 2π)
+    while(direction < 0) direction += 2 * M_PI;
+    while(direction >= 2 * M_PI) direction -= 2 * M_PI;
 
     return direction;
 }
-
 
 void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
     uint8_t buf[AMCOM_MAX_PACKET_SIZE];              // buffer used to serialize outgoing packets
@@ -207,13 +231,11 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
 
     switch (packet->header.type) {
     case AMCOM_IDENTIFY_REQUEST:
-        printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
         AMCOM_IdentifyResponsePayload identifyResponse;
         sprintf(identifyResponse.playerName, "PudziAM");
         toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
         break;
     case AMCOM_NEW_GAME_REQUEST:
-        printf("Got NEW_GAME.request.\n");
         const AMCOM_NewGameRequestPayload* packetNewGame = (const AMCOM_NewGameRequestPayload*)packet->payload;
 
         game.my_player_number = packetNewGame->playerNumber;
@@ -228,7 +250,6 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
         toSend = AMCOM_Serialize(AMCOM_NEW_GAME_RESPONSE, &newGameResponse, sizeof(newGameResponse), buf);
         break;
     case AMCOM_OBJECT_UPDATE_REQUEST:
-        printf("Got OBJECT_UPDATE.request.\n");
 
         const AMCOM_ObjectUpdateRequestPayload* objectUpdate = (const AMCOM_ObjectUpdateRequestPayload*)packet->payload;
 
@@ -245,7 +266,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_FOOD:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_FOOD) {
                         game.food[object->objectNo].hp = object->hp;
                         game.food[object->objectNo].x = object->x;
                         game.food[object->objectNo].y = object->y;
@@ -255,7 +276,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_SPARK:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_SPARKS) {
                         game.sparks[object->objectNo].hp = object->hp;
                         game.sparks[object->objectNo].x = object->x;
                         game.sparks[object->objectNo].y = object->y;
@@ -265,7 +286,7 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
                     }
                     break;
                 case AMCOM_OBJECT_GLUE:
-                    if(object->objectNo < MAX_NUMBER_OF_OBJECTS) {
+                    if(object->objectNo < MAX_NUMBER_OF_GLUE) {
                         game.glue[object->objectNo].hp = object->hp;
                         game.glue[object->objectNo].x = object->x;
                         game.glue[object->objectNo].y = object->y;
@@ -283,8 +304,8 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
         }
 
         if (game.my_player_number < game.number_of_players) {
-            object_t* my_player = &game.players[game.my_player_number];
-            printf("My player: HP: %d, Position: (%.2f, %.2f)\n", my_player->hp, my_player->x, my_player->y);
+            my_player = &game.players[game.my_player_number];
+            // printf("My player: HP: %d, Position: (%.2f, %.2f)\n", my_player->hp, my_player->x, my_player->y);
         } else {
             printf("My player number %d is out of range (max %d players)\n", game.my_player_number, game.number_of_players);
         }
@@ -293,14 +314,12 @@ void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
 
         break;
     case AMCOM_MOVE_REQUEST:
-        printf("Got MOVE.request.\n");
         AMCOM_MoveResponsePayload moveResponse;
 
         moveResponse.angle = choose_angle();
         toSend = AMCOM_Serialize(AMCOM_MOVE_RESPONSE, &moveResponse, sizeof(moveResponse), buf);
         break;
     case AMCOM_GAME_OVER_REQUEST:
-        printf("Got GAME_OVER.request.\n");
         AMCOM_GameOverResponsePayload gameOverResponse;
         sprintf(gameOverResponse.endMessage, "To by nic nie dalo...");
         toSend = AMCOM_Serialize(AMCOM_GAME_OVER_RESPONSE, &gameOverResponse, sizeof(gameOverResponse), buf);

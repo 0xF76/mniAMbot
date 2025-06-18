@@ -5,19 +5,6 @@
 
 #include "vector.h"
 
-
-static float wrap_angle_unsigned(float angle) {
-	while (angle < 0.0f) {
-		angle += 2.0f * M_PI;
-	}
-	while (angle >= 2.0f * M_PI) {
-		angle -= 2.0f * M_PI;
-	}
-	return angle;
-}
-
-
-
 vec_t v_init(float x, float y) {
 	vec_t result;
 	result.x = x;
@@ -43,14 +30,34 @@ vec_t v_norm(vec_t v) {
 		result.x = v.x / len;
 		result.y = v.y / len;
 	} else {
+		// If the length is too small, return a zero vector
 		result.x = 0.0f;
-		result.y = 0.0f; // return zero vector if length is too small
+		result.y = 0.0f;
 	}
 	return result;
 }
 
+
 float v_angle(vec_t v) {
 	float angle = atan2f(v.y, v.x);
-	return wrap_angle_unsigned(angle);
+
+	//ensure angle is in the range [0, 2π)
+	while(angle < 0.0f) {
+        angle += 2.0f * M_PI;
+    }
+
+	return angle;
 }
 
+
+float v_dot(vec_t a, vec_t b) {
+	a = v_norm(a);
+	b = v_norm(b);
+	return a.x * b.x + a.y * b.y;
+}
+
+float v_cross(vec_t a, vec_t b) {
+	a = v_norm(a);
+	b = v_norm(b);
+	return a.x * b.y - a.y * b.x;
+}
