@@ -13,6 +13,7 @@
 //additional includes for the player
 #include <math.h>
 #include "vector.h"
+#include <stdbool.h>
 
 #define MAX_NUMBER_OF_PLAYERS 8
 #define MAX_NUMBER_OF_FOOD 100
@@ -32,6 +33,12 @@ typedef struct {
     float x;
     float y;
 } object_t;
+
+typedef struct {
+    const object_t* obj;
+    float score;
+    vec_t vector;
+} target_t;
 
 typedef struct {
     uint8_t my_player_number;
@@ -71,211 +78,151 @@ float calculate_score(float hp, float distance) {
     return hp/(distance/distance_scale);
 }
 
+bool is_glue_on_path(vec_t vector) {
+    for(uint8_t i = 0; i < game.number_of_glue; i++) {
+        const object_t* glue = &game.glue[i];
+
+        //skip dead glue
+        if(glue->hp <= 0) {
+            continue;
+        }
+
+        vec_t glue_vector = v_init(glue->x - my_player->x, glue->y - my_player->y);
+        float glue_distance = v_len(glue_vector) - 100; //100 is the glue radius
+        float distance = v_len(vector);
+
+        if(glue_distance < distance) {
+            float glue_angle = atan2f(100, glue_distance);
+
+            if(v_angle(vector) < v_angle(glue_vector) + glue_angle && v_angle(vector) > v_angle(glue_vector) - glue_angle) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 float choose_angle(void) {
     static float direction = 0.0f; // angle in radians
 
-    const float DANGER_THRESHOLD = 100.0f;
-    const float FOOD_THRESHOLD = 500.0f;
+    //TODO: radius based on player size
 
-    const object_t* worst_danger = NULL;
-    float worst_danger_score = 0.0f;
-    vec_t worst_danger_vec = v_init(0.0f, 0.0f);
+    const float DANGER_RADIUS = 150.0f; // radius around the player where danger is considered
+    const float SPARK_RADIUS = 50.0f; // radius around the spark where danger is considered
 
-    float best_food_score = 0.0f;
-    vec_t best_food_vec = v_init(0.0f, 0.0f);
+    target_t worst_danger = {NULL, 0.0f, v_init(0,0)};
+    target_t best_food = {NULL, 0.0f, v_init(0,0)};
+    target_t best_prey = {NULL, 0.0f, v_init(0,0)};
+    target_t worst_spark = {NULL, 0.0f, v_init(0,0)};
 
-    float best_prey_score = 0.0f;
-    vec_t best_prey_vec = v_init(0.0f, 0.0f);
-
-
-
-    object_t* my_player = &game.players[game.my_player_number];
-
-    /* PLAYERS */
+    // --- Players ---
     for(uint8_t i = 0; i < game.number_of_players; i++) {
         // skip yourself
         if(i == game.my_player_number) {
             continue;
         }
 
-        const object_t* player = &game.players[i];
-        //skip dead players
+        object_t* player = &game.players[i];
+        // skip dead players
         if(player->hp <= 0) {
             continue;
         }
 
+        vec_t player_vector = v_init(player->x - my_player->x, player->y - my_player->y);
+        float player_distance = v_len(player_vector);
 
-        vec_t v = v_init(player->x - my_player->x, player->y - my_player->y);
-        float distance = v_len(v);
-
-
-        // determine if the player is a danger or a prey
-        if(player->hp >= my_player->hp) {
-            if(distance < DANGER_THRESHOLD + (player->hp + my_player->hp)/2) {
-                float score = calculate_score(player->hp, distance);
-
-                if(score > worst_danger_score) {
-                    worst_danger = player;
-                    worst_danger_score = score;
-                    worst_danger_vec = v;
-                }
-            }
-        } else if(player->hp < my_player->hp) {
-
-            /* GLUE */
-            for(uint8_t i = 0; i < game.number_of_glue; i++) {
-                const object_t* glue = &game.glue[i];
-                //skip dead glue
-                if(glue->hp <= 0) {
-                    continue;
-                }
-                vec_t glue_vec = v_init(glue->x - my_player->x, glue->y - my_player->y);
-                float glue_distance = v_len(glue_vec) - 100.0f; // 100 is the glue radius
-
-                if(glue_distance < distance) {
-                    float glue_angle = atan2f(100, glue_distance);
-
-                    if(v_angle(v) < v_angle(glue_vec) + glue_angle && v_angle(v) > v_angle(glue_vec) - glue_angle) {
-                        distance *= 20; // if the food is in the glue radius, make it harder to reach
-                    }
-                }
+        if(player->hp > my_player->hp) {
+            if(player_distance > DANGER_RADIUS) {
+                continue; // too far to be dangerous
             }
 
-            float score = calculate_score(5*player->hp, distance);
-
-            if(distance > FOOD_THRESHOLD) {
-                continue;
+            float score = calculate_score(player->hp, player_distance);
+            if(score > worst_danger.score) {
+                worst_danger.obj = player;
+                worst_danger.score = score;
+                worst_danger.vector = player_vector;
             }
+        } else if(my_player->hp > player->hp) {
 
+            player_distance = is_glue_on_path(player_vector) ? player_distance * 20 : player_distance;
 
-            if(score > best_prey_score) {
-                best_prey_score = score;
-                best_prey_vec = v;
+            float score = calculate_score(my_player->hp, player_distance);
+            if(score > best_prey.score) {
+                best_prey.obj = player;
+                best_prey.score = score;
+                best_prey.vector = player_vector;
             }
         }
     }
 
-    /* SPARKS */
+    // --- Sparks ---
     for(uint8_t i = 0; i < game.number_of_sparks; i++) {
         const object_t* spark = &game.sparks[i];
-
-        //skip dead sparks
+        // skip dead sparks
         if(spark->hp <= 0) {
             continue;
         }
 
-        vec_t v = v_init(spark->x - my_player->x, spark->y - my_player->y);
-        float distance = v_len(v);
+        vec_t spark_vector = v_init(spark->x - my_player->x, spark->y - my_player->y);
+        float spark_distance = v_len(spark_vector);
 
-        if(distance < DANGER_THRESHOLD) {
-            float score = calculate_score(1, distance);
-            if(score > worst_danger_score) {
-                worst_danger = spark;
-                worst_danger_score = score;
-                worst_danger_vec = v;
-            }
+        if(spark_distance > SPARK_RADIUS) {
+            continue; // too far to be dangerous
+        }
+
+        float score = calculate_score(spark->hp, spark_distance);
+        if(score > worst_spark.score) {
+            worst_spark.obj = spark;
+            worst_spark.score = score;
+            worst_spark.vector = spark_vector;
         }
     }
 
 
-    /* FOOD */
+    // --- Food ---
     for(uint8_t i = 0; i < game.number_of_food; i++) {
         const object_t* food = &game.food[i];
-
-        //skip dead food
+        // skip dead food
         if(food->hp <= 0) {
             continue;
         }
 
-        vec_t v = v_init(food->x - my_player->x, food->y - my_player->y);
-        float distance = v_len(v);
+        vec_t food_vector = v_init(food->x - my_player->x, food->y - my_player->y);
+        float food_distance = v_len(food_vector);
 
+        food_distance = is_glue_on_path(food_vector) ? food_distance * 20 : food_distance;
 
-        float danger_angle = M_PI/4;
-        if(worst_danger != NULL) {
-            danger_angle += atan2f((25.0f + (float)worst_danger->hp)/2, distance);
-        }
-
-
-
-        //skip food that is too close to a danger
-        if(v_angle(v) < v_angle(worst_danger_vec) + danger_angle && v_angle(v) > v_angle(worst_danger_vec) - danger_angle && distance + 40.0f > v_len(worst_danger_vec)) {
-            continue;
-        }
-
-        /* GLUE */
-        for(uint8_t i = 0; i < game.number_of_glue; i++) {
-            const object_t* glue = &game.glue[i];
-            //skip dead glue
-            if(glue->hp <= 0) {
-                continue;
-            }
-            vec_t glue_vec = v_init(glue->x - my_player->x, glue->y - my_player->y);
-            float glue_distance = v_len(glue_vec) - 100.0f; // 100 is the glue radius
-
-            if(glue_distance < distance) {
-                float glue_angle = atan2f(100, glue_distance);
-
-                if(v_angle(v) < v_angle(glue_vec) + glue_angle && v_angle(v) > v_angle(glue_vec) - glue_angle) {
-                    distance *= 20; // if the food is in the glue radius, make it harder to reach
-                }
-            }
-        }
-
-        float score = calculate_score(10*food->hp, distance);
-        if(distance < FOOD_THRESHOLD && score > best_food_score) {
-            best_food_score = score;
-            best_food_vec = v;
+        float score = calculate_score(food->hp, food_distance);
+        if(score > best_food.score) {
+            best_food.obj = food;
+            best_food.score = score;
+            best_food.vector = food_vector;
         }
     }
 
-    printf("---------------------------------------------\n");
-    printf("%f %f food\n", best_food_score, v_angle(best_food_vec)*180/M_PI);
-    printf("%f %f prey\n", best_prey_score, v_angle(best_prey_vec)*180/M_PI);
-    printf("%f %f danger\n", worst_danger_score, v_angle(worst_danger_vec)*180/M_PI);
 
-    //print what is the biggest danger, print type, hp, x,y
-    if(worst_danger != NULL) {
-        printf("Worst danger: HP: %d, Position: (%.2f, %.2f)\n",
 
-            worst_danger->hp,
-            worst_danger_vec.x + my_player->x,
-            worst_danger_vec.y + my_player->y);
-    } else {
-        printf("No danger detected\n");
+    // --- Direction logic ---
+    if(worst_danger.score > 0) {
+        direction = v_angle(v_init(-worst_danger.vector.y, worst_danger.vector.x));
+    }
+    else if(worst_spark.score > 0) {
+        direction = v_angle(v_init(-worst_spark.vector.y, -worst_spark.vector.x));
+    }
+    else if(best_food.score > 0) {
+        direction = v_angle(best_food.vector);
+    }
+    else if(best_prey.score > 0) {
+        direction = v_angle(best_prey.vector);
     }
 
-    if(best_food_score > worst_danger_score && best_food_score > best_prey_score && v_dot(best_food_vec, worst_danger_vec) < 0.5f) {
-        direction = v_angle(best_food_vec);
-        printf("Choosing food direction: %.2f degrees\n", direction * 180 / M_PI);
-    } else if(best_prey_score > worst_danger_score && best_prey_score > best_food_score && v_dot(best_prey_vec, worst_danger_vec) < 0.5f) {
-        direction = v_angle(best_prey_vec);
-        printf("Choosing prey direction: %.2f degrees\n", direction * 180 / M_PI);
-    } else if(worst_danger_score > 0) {
-        if(v_cross(v_init(cosf(direction), sinf(direction)), worst_danger_vec) < 0) {
-            direction += M_PI_2; // turn left
-        } else {
-            direction -= M_PI_2; // turn right
-        }
-        printf("Trying to avoid danger: %.2f degrees\n", direction * 180 / M_PI);
-    }
 
-    if(my_player->x > game.map_width/2 - 100.0f) {
-        direction -= M_PI_4;
-    } else if(my_player->x < -game.map_width/2 + 100.0f) {
-        direction += M_PI_4;
-    }
-
-    if(my_player->y > game.map_height/2 - 100.0f) {
-        direction -= M_PI_4;
-    } else if(my_player->y < -game.map_height/2 + 100.0f) {
-        direction += M_PI_4;
-    }
-
+    // Normalizacja kąta do [0, 2π)
+    while(direction < 0) direction += 2 * M_PI;
+    while(direction >= 2 * M_PI) direction -= 2 * M_PI;
 
     return direction;
 }
-
 
 void amPacketHandler(const AMCOM_Packet* packet, void* userContext) {
     uint8_t buf[AMCOM_MAX_PACKET_SIZE];              // buffer used to serialize outgoing packets
