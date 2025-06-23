@@ -9,18 +9,26 @@
 
 #include "amcom.h"
 #include "amcom_packets.h"
-
 //additional includes for the player
 #include <math.h>
 #include "vector.h"
 #include <stdbool.h>
 
+
+
+/* --- Configuration constants --- */
 #define MAX_NUMBER_OF_PLAYERS 8
+
 #define MAX_NUMBER_OF_FOOD 100
+
 #define MAX_NUMBER_OF_SPARKS 8
 #define MAX_NUMBER_OF_GLUE 8
 
+/* --- Type declarations --- */
 
+/**
+ * @brief Enumeration of all object types communicated through AMCOM.
+ */
 enum AMCOM_ObjectType {
     AMCOM_OBJECT_PLAYER = 0,
     AMCOM_OBJECT_FOOD = 1,
@@ -28,18 +36,29 @@ enum AMCOM_ObjectType {
     AMCOM_OBJECT_GLUE = 3
 };
 
+/**
+ * @brief Generic object present on the map
+ */
 typedef struct {
     int8_t hp;
     float x;
     float y;
 } object_t;
 
+/**
+ * @brief Wrapper storing a candidate target with vector and score
+ */
 typedef struct {
     const object_t* obj;
     float score;
     vec_t vector;
 } target_t;
 
+/**
+ * @brief Global game state reconstructed from AMCOM updates.
+ *
+ * The client copy of game state, used to make decisions about the next move.
+ */
 typedef struct {
     uint8_t my_player_number;
 
@@ -59,6 +78,10 @@ typedef struct {
     float map_height;
 } game_t;
 
+/* --- Global variables --- */
+
+/* * @brief Latest game state
+ */
 game_t game = {
     .my_player_number = 0,
     .number_of_players = 0,
@@ -69,15 +92,55 @@ game_t game = {
     .number_of_glue = 0
 };
 
+/* * @brief Pointer to the player object of the current player
+ */
 object_t* my_player = NULL;
 
-
-float calculate_score(float hp, float distance) {
-    const float distance_scale = sqrtf(2) * game.map_height;
-
-    return hp/(distance/distance_scale);
+/**
+ * @brief Calculate the danger radius based on player and target HP.
+ *
+ * The danger radius is defined as twice the sum of the player and target radius.
+ * The player and target basic diameter is assumed to be 25, so the formula is:
+ * danger_radius = 2 * (25 + player_hp + 25 + target_hp)
+ *
+ * @param player_hp HP of the player
+ * @param target_hp HP of the target
+ * @return Calculated danger radius
+ */
+float calculate_danger_radius(float player_hp, float target_hp) {
+    return 2*(25 + player_hp + 25 + target_hp);
 }
 
+/**
+ * @brief Calculate a score based on HP and distance.
+ *
+ * The score is calculated as:
+ * score = hp / (distance / (map_height * sqrt(2)))
+ *
+ * This normalizes the distance based on the map height and gives a higher score
+ * for closer objects with higher HP.
+ *
+ * @param hp HP of the object
+ * @param distance Distance to the object
+ * @return Calculated score
+ */
+float calculate_score(float hp, float distance) {
+    float normalized_distance = distance/(game.map_height * sqrt(2));
+
+    return hp/normalized_distance;
+}
+
+
+
+/**
+ * @brief Check if there is glue on the path to the given vector.
+ *
+ * This function checks if any glue object is within a certain angle range
+ * of the vector from the player to the glue. If glue is found, it returns true.
+ *
+ * @param vector The vector to check against glue positions
+ * @return true if glue is on the path, false otherwise
+ */
 bool is_glue_on_path(vec_t vector) {
     for(uint8_t i = 0; i < game.number_of_glue; i++) {
         const object_t* glue = &game.glue[i];
@@ -102,125 +165,189 @@ bool is_glue_on_path(vec_t vector) {
     return false;
 }
 
+
+
+
+/**
+ * @brief Choose the angle for the next move based on the game state.
+ *
+ * This function analyzes the game state and decides the best angle to move
+ * based on the current player's HP, nearby players, food, sparks, and glue.
+ * It returns an angle in radians.
+ *
+ * @return The chosen angle in radians
+ */
 float choose_angle(void) {
-    static float direction = 0.0f; // angle in radians
+    // If last player, circle around center
+    bool am_last = true;
+    for (int i = 0; i < game.number_of_players; i++) {
+        if (i != game.my_player_number && game.players[i].hp > 0) {
+            am_last = false;
+            break;
+        }
+    }
 
-    //TODO: radius based on player size
+    if(am_last) {
+        const float circle_radius = 200;
 
-    const float DANGER_RADIUS = 150.0f; // radius around the player where danger is considered
-    const float SPARK_RADIUS = 50.0f; // radius around the spark where danger is considered
+        static float phi = 0.0f;
+        const float DELTA = M_PI/ 36.0f; // 5 degrees step
 
-    target_t worst_danger = {NULL, 0.0f, v_init(0,0)};
-    target_t best_food = {NULL, 0.0f, v_init(0,0)};
-    target_t best_prey = {NULL, 0.0f, v_init(0,0)};
-    target_t worst_spark = {NULL, 0.0f, v_init(0,0)};
+        phi += DELTA;
+        while(phi < 0.0f) phi += 2.0f * M_PI;
+        while(phi >= 2.0f * M_PI) phi -= 2.0f * M_PI;
 
-    // --- Players ---
+        vec_t circle_point = v_init(circle_radius * cosf(phi), circle_radius * sinf(phi));
+        vec_t my_position = v_init(my_player->x, my_player->y);
+        vec_t vector_to_circle = v_sub(circle_point, my_position);
+
+        return v_angle(vector_to_circle);
+    }
+
+
+    //current angle of movement (in radians)
+    static float direction = 0.0f;
+
+    target_t worst_danger = {
+        .obj = NULL,
+        .score = 0.0f,
+        .vector = v_init(0, 0)
+    };
+
+    target_t worst_spark = {
+        .obj = NULL,
+        .score = 0.0f,
+        .vector = v_init(0, 0)
+    };
+
+    target_t best_food = {
+        .obj = NULL,
+        .score = 0.0f,
+        .vector = v_init(0, 0)
+    };
+
+    target_t best_prey = {
+        .obj = NULL,
+        .score = 0.0f,
+        .vector = v_init(0, 0)
+    };
+
+    /* PLAYERS */
     for(uint8_t i = 0; i < game.number_of_players; i++) {
-        // skip yourself
+        //skip myself
         if(i == game.my_player_number) {
             continue;
         }
 
         object_t* player = &game.players[i];
-        // skip dead players
         if(player->hp <= 0) {
-            continue;
+            continue; // skip dead players
         }
 
         vec_t player_vector = v_init(player->x - my_player->x, player->y - my_player->y);
         float player_distance = v_len(player_vector);
 
+        // if player is stronger, consider it as danger
         if(player->hp > my_player->hp) {
-            if(player_distance > DANGER_RADIUS) {
-                continue; // too far to be dangerous
+            if(player_distance < calculate_danger_radius(my_player->hp, player->hp)) {
+                float score = calculate_score(1, player_distance);
+                if(score > worst_danger.score) {
+                    worst_danger.score = score;
+                    worst_danger.obj = player;
+                    worst_danger.vector = player_vector;
+                }
             }
-
+        } else if(player->hp < my_player->hp) { // if player is weaker, consider it as prey
             float score = calculate_score(player->hp, player_distance);
-            if(score > worst_danger.score) {
-                worst_danger.obj = player;
-                worst_danger.score = score;
-                worst_danger.vector = player_vector;
-            }
-        } else if(my_player->hp > player->hp) {
-
-            player_distance = is_glue_on_path(player_vector) ? player_distance * 20 : player_distance;
-
-            float score = calculate_score(my_player->hp, player_distance);
             if(score > best_prey.score) {
-                best_prey.obj = player;
                 best_prey.score = score;
+                best_prey.obj = player;
                 best_prey.vector = player_vector;
             }
         }
     }
 
-    // --- Sparks ---
+    /* SPARKS */
     for(uint8_t i = 0; i < game.number_of_sparks; i++) {
-        const object_t* spark = &game.sparks[i];
-        // skip dead sparks
+        object_t* spark = &game.sparks[i];
         if(spark->hp <= 0) {
-            continue;
+            continue; // skip dead sparks
         }
 
         vec_t spark_vector = v_init(spark->x - my_player->x, spark->y - my_player->y);
         float spark_distance = v_len(spark_vector);
 
-        if(spark_distance > SPARK_RADIUS) {
-            continue; // too far to be dangerous
-        }
-
-        float score = calculate_score(spark->hp, spark_distance);
-        if(score > worst_spark.score) {
-            worst_spark.obj = spark;
-            worst_spark.score = score;
-            worst_spark.vector = spark_vector;
+        if(spark_distance < (25+my_player->hp+25+50)) { // danger radius for sparks
+            float score = calculate_score(1, spark_distance);
+            if(score > worst_spark.score) {
+                worst_spark.score = score;
+                worst_spark.obj = spark;
+                worst_spark.vector = spark_vector;
+            }
         }
     }
 
 
-    // --- Food ---
+    /* FOOD */
     for(uint8_t i = 0; i < game.number_of_food; i++) {
-        const object_t* food = &game.food[i];
-        // skip dead food
+        object_t* food = &game.food[i];
+
         if(food->hp <= 0) {
-            continue;
+            continue; // skip dead food
         }
 
         vec_t food_vector = v_init(food->x - my_player->x, food->y - my_player->y);
-        float food_distance = v_len(food_vector);
+        float food_distance = is_glue_on_path(food_vector) ? v_len(food_vector) * 20 : v_len(food_vector); // if glue is on the path, increase distance
+        float food_score = 2*calculate_score(food->hp, food_distance);
 
-        food_distance = is_glue_on_path(food_vector) ? food_distance * 20 : food_distance;
-
-        float score = calculate_score(food->hp, food_distance);
-        if(score > best_food.score) {
+        if(food_score > best_food.score) {
+            best_food.score = food_score;
             best_food.obj = food;
-            best_food.score = score;
             best_food.vector = food_vector;
         }
     }
 
+    // Debugging output to see the scores of different targets
+    // printf("Scores: Danger: %.2f, Spark: %.2f, Food: %.2f, Prey: %.2f\n", worst_danger.score, worst_spark.score, best_food.score, best_prey.score);
 
 
-    // --- Direction logic ---
-    if(worst_danger.score > 0) {
-        direction = v_angle(v_init(-worst_danger.vector.y, worst_danger.vector.x));
+    if(worst_danger.score > 0 || worst_spark.score > 0) {
+        if(worst_danger.score > worst_spark.score) {
+            // if danger is worse than spark, run away from danger
+            if(v_len(worst_danger.vector) < (25 + my_player->hp + 25 + 100)) {
+                // if danger is too close, run away in the opposite direction
+                direction = v_angle(worst_danger.vector) + M_PI;
+            } else {
+                // if danger is not that close, run away in a perpendicular direction
+                direction = v_angle(worst_danger.vector) + M_PI_2;
+            }
+            // Debugging output to see the direction we are running away from danger
+            // printf("Running away from danger: %f\n", direction * (180.0f / M_PI));
+            return direction;
+        }
+        // if spark is worse than danger, run away from spark
+        direction = v_angle(worst_spark.vector) + M_PI_2;
+        // Debugging output to see the direction we are running away from spark
+        // printf("Running away from spark: %f\n", direction * (180.0f / M_PI));
+        return direction;
     }
-    else if(worst_spark.score > 0) {
-        direction = v_angle(v_init(-worst_spark.vector.y, -worst_spark.vector.x));
-    }
-    else if(best_food.score > 0) {
+    // if there is no danger or spark, go for food or prey
+    if(best_food.score > best_prey.score && best_food.score > 0) {
+        // if there is food, go for it
         direction = v_angle(best_food.vector);
+        // Debugging output to see the direction we are going for food
+        // printf("Going for food: %f\n", direction * (180.0f / M_PI));
+        return direction;
     }
-    else if(best_prey.score > 0) {
+
+    if(best_prey.score > 0) {
+        // if there is prey, go for it
         direction = v_angle(best_prey.vector);
+        // Debugging output to see the direction we are going for prey
+        // printf("Going for prey: %f\n", direction * (180.0f / M_PI));
+        return direction;
     }
-
-
-    // Normalizacja kąta do [0, 2π)
-    while(direction < 0) direction += 2 * M_PI;
-    while(direction >= 2 * M_PI) direction -= 2 * M_PI;
-
+    // if there is no food or prey, just go in the current direction
     return direction;
 }
 
